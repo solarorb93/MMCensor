@@ -1,0 +1,65 @@
+0. If this is zip file is called MMC-vXY.zip, skip this step.  If this zip file is called
+MMC-vYX-light.zip, it does not come with the NudeNet network weights (probably because it
+is posted somewhere with a filesize limit below 25MB).  Download the weights file from
+https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.pt
+If for some reason that link doesn't work, go to 
+https://github.com/notAI-tech/NudeNet
+and look for the "pytorch link" for the "640m" model.
+The file should be called 640m.pt and be approximately 50MB.  Put the file in the
+"neuralnet_models" folder.
+
+1. Double-click on setup.bat.  This will describe the five different neural net engines
+that MMCensor can install for you.  1 is the fastest, and 5 is the slowest.  You should
+select the fastest that is compatible with your hardware.  If for some reason it doesn't
+work or you don't want to, you can always go DOWN the list to a slower version.
+
+Go through the setup.bat process.  IT MAY TAKE A LONG TIME.  The tensorrt engine on my
+computer takes fifteen minutes to install, and that's with a NVidia RTX 4090 and AMD 7950x.
+On your machine it may take even longer.  If you don't see "press any key to continue",
+the installer is still working.
+
+This installer will also create a install-log-XXXXXXXX.txt file in your MMCensor folder,
+which is helpful for debugging problems.  Don't delete it!
+
+If at any point you get an error message about a "path" being "too long", you are running a
+version of Windows that has a path limit of 260 characters.  I don't know why Windows does this,
+sorry.  You can either edit your Windows Registry to remove the limit (as described here:
+https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation?tabs=registry
+which is an official Microsoft website), or you can try to move the MMCensor folder to
+a very high-level folder (like C:/MMC/ instead of C:/users/mylongusername/Documents/faxes/2017/hidden/MMCensor).
+You *definitely* need to reboot your computer if you do the registry change.
+
+2. Once the setup is done, there will be a run-XXXXXXX.bat file created in the main MMCensor
+folder, which you can double-click to launch MMCensor.  It will open a window with two tabs.
+In Decorators, it will allow you to add and remove decorators, and configure them.  Choose
+a type from the dropdown and use "add" to add it.  Use the "x" button to remove.  To change
+options, click configure, and then "apply config" to apply your changes.  
+
+In the "Realtime" tab, you can click "Make Ready" to warm up the neural net.  Once it is
+ready, the "Start" button will be available.  You can choose which monitors or windows
+you want to censor in the window (use the scroll wheel to scroll up or down).  You can 
+select multiple windows, but selecting multiple windows has a SIGNIFICANT performance hit.
+It is usually better to select a whole monitor rather than two windows on the monitor.
+Use Start to start the censoring and Stop to stop it.  If you click Screenshot, it will
+save a screenshot in the Screenshots/ folder in the MMC folder.  Refresh Window List 
+refreshes the window list if you open new windows or close old ones.  FPS numbers will
+be visible in the command window.
+
+Sometimes the censoring overlay doesn't properly pop up.  I don't know why.  You can find 
+it in your taskbar and click it to bring it up.
+
+To end the program, simply use the X in the top-right of the control window.
+
+Version 4.1 is not super hardened and resilient to error stuff yet so if anything weird happens,
+try starting again.  I just wanted to release it to motivate myself to keep going.
+
+*******************
+
+If you have any issues, try to figure them out!  However, if you want help, you can ask me
+on discord.  Please be sure to tell me
+* EXACTLY, step by step, what you did (you can always entirely delete the MMCensor folder and
+start from scratch from the zip file)
+* The install-log-XXXXXXX.txt file for the engine you're trying to use
+* Exactly what behavior you're seeing that isn't what you're expecting
+* Any relevant output from the run-XXXXX.bat file
+* Your graphics card model

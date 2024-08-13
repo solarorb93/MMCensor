@@ -1,0 +1,28 @@
+your plugin will be a single folder in this folder.
+
+Take a look at the 'bar' folder for an example.
+
+Your plugin must have an __init__.py that exports a class named decorator()
+
+Your class must have the following functions:
+
+* Initialize: this will be called once, when your class is added to the 
+list of active decorators.  It will take a single argument, which is a 
+list of all the classes you can expect to see.
+
+* Decorate: this takes two arguments.  The first is an image, formatted
+as a numpy array in (h,w,3) shape in BGR format (this is the format
+used by OpenCV).  The second is a list of detected boxes.  Each box
+is of the format
+[
+	timestamp, in nanoseconds
+	class, a string, which will be an element of the known classes from the initialize function
+	[ x1, y1, x2, y2 ], a list of four integers, which are the coordinates of the detected feature
+]
+This function must return a modified img in the same format
+
+* export_settings: this function takes no arguments and must return a dictionary that will be saved as part of a JSON file.
+
+* import_settings: this function takes a dictionary as an argument and must set up the decorator to the same settings as were saved in export_settings
+
+To be continued...

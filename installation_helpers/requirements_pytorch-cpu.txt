@@ -1,0 +1,11 @@
+dxcam==0.0.5
+matplotlib==3.9.0
+msvc_runtime
+numpy
+opencv-python
+pywin32==306
+torch==2.3.1
+torchaudio==2.3.1
+torchvision==0.18.1
+ultralytics==8.2.61
+ultralytics-thop==2.0.0
