@@ -293,7 +293,6 @@ class mmc_detect_loop_class:
                             output = [ self.get_model_for_size(size).predict( x, imgsz=size, verbose = False )[0] for x in batch ]
                         else:
                             output = self.get_model_for_size(size).predict( batch, imgsz=size, verbose = False )
-                        time.sleep(0.6)
                         #if random.randint(0,100) <2:
                             #raise Exception( "test throw" )
                         self.profiler.mark( "predict" )
