@@ -209,28 +209,37 @@ class mmc_detect_loop_class:
         self.fps_limit = 300
         self.last_detect_finish = 0
 
-        self.working_sizes = mmc_const.supported_sizes
-        if self.env == 'openvino':
-            self.model = YOLO( "../neuralnet_models/640m_openvino_model" )
-            self.single_model = True
-        elif self.env == 'directml':
-            self.model = YOLO( "../neuralnet_models/640m.onnx" )
-            self.single_model = True
-        elif self.env == 'tensorrt':
-            self.models = {}
-            self.working_sizes = []
-            for size in mmc_const.supported_sizes:
+        self.models = {}
+        for size in mmc_const.supported_sizes:
+            if self.env == 'openvino':
+                model = YOLO( "../neuralnet_models/640m_openvino_model" )
+            elif self.env == 'directml':
+                onnx_path = "../neuralnet_models/640m.onnx"
+                model = YOLO( onnx_path )
+            elif self.env == 'tensorrt':
                 engine_path = "../neuralnet_models/640m-%d.engine"%size
                 if os.path.isfile( engine_path ):
-                    self.models[ size ] = YOLO( engine_path )
-                    self.working_sizes.append( size )
-            self.single_model = False
-        else:
-            self.model = YOLO( "../neuralnet_models/640m.pt" )
-            self.single_model = True
+                    model = YOLO( engine_path )
+                else:
+                    model = None
+            # tested this on 20240813
+            # was 50% slower than just using the generic 640m.pt on my 4090,
+            # even when exporting with half=True and simplify=True
+            # also used 10GB of VRAM.  -not worth-.
+            #elif self.env == 'pytorch-cuda':
+                #onnx_path = "../neuralnet_models/640m-%d.onnx"%size
+                #if os.path.isfile( onnx_path ):
+                    #model = YOLO( onnx_path )
+                #else:
+                    #model = None
+            else:
+                model = YOLO( "../neuralnet_models/640m.pt" )
+
+            if model is not None:
+                self.models[size] = model
 
         warmup_img = np.full( ( 2560, 2560, 3 ), 127, dtype=np.uint8 )
-        for size in self.working_sizes:
+        for size in self.models:
             model = self.get_model_for_size( size )
             if model is not None:
                 self.get_model_for_size(size).predict(warmup_img, imgsz=size, verbose=False )
@@ -256,10 +265,7 @@ class mmc_detect_loop_class:
         self.state[0] = 1
 
     def get_model_for_size( self, size ):
-        if self.single_model:
-            return self.model
-        else:
-            return self.models[ size ]
+        return self.models[ size ]
 
     def go_detect( self ):
         n = 0

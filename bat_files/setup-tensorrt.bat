@@ -10,7 +10,7 @@ call winpython-tensorrt/WPy64-31241/scripts/env_for_icons.bat
 pip debug --verbose
 pip install -r installation_helpers/requirements_tensorrt.txt --extra-index-url https://download.pytorch.org/whl/cu121 --cache-dir pip-cache/ --extra-index-url https://pypi.nvidia.com --prefer-binary --log install-log-tensorrt-verbose.txt --verbose
 cd mmc_code
-python -m mmcensor.setup.make_engine.py
+python -m mmcensor.setup.make_engine
 copy ..\bat_files\run-tensorrt.bat ..\run-tensorrt.bat
 copy ..\bat_files\uninstall-tensorrt.bat ..\uninstall-tensorrt.bat
 pause
