@@ -2,6 +2,7 @@ import importlib
 import tkinter as tk
 import cv2
 from mmcensor.decorate.decorator_utils import feature_selector
+import mmcensor.geo as geo
 
 class decorator:
 
@@ -12,9 +13,13 @@ class decorator:
         return
 
     def decorate( self, img, boxes ):
-        for box in boxes:
-            if self.known_classes[box[1]] in self.classes:
-                img = cv2.rectangle( img, (box[2],box[3]),(box[4],box[5]), tuple(reversed(self.color)), 3 )
+        condensed = geo.condense_boxes_single( boxes )
+
+        for feature in condensed:
+            if self.known_classes[feature] in self.classes:
+                for box in condensed[feature]:
+                    img = cv2.rectangle( img, (box[2],box[3]),(box[4],box[5]), tuple(reversed(self.color)), 3 )
+
         return img
 
     def export_settings( self ):
