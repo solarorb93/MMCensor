@@ -1,3 +1,5 @@
+from statistics import median
+
 import numpy as np
 import dxcam
 import ctypes
@@ -179,7 +181,13 @@ class mmc_detect_loop_async:
         self.state = manager.list()
         self.state.append( 0 )
         self.sizes.extend( sizes )
-        self.P1 = Process( target = mmc_detect_loop_remote, args = ( self.sizes, self.state, img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name ) )
+
+        self.loaded_sizes = manager.list()
+
+        self.conf = manager.Value('d', 0.25)
+        self.delay_margin = manager.Value('d', 0.075)
+
+        self.P1 = Process( target = mmc_detect_loop_remote, args = ( self.sizes, self.loaded_sizes,self.state, self.conf,img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name ) )
 
     def start( self ):
         self.P1.start()
@@ -193,33 +201,39 @@ class mmc_detect_loop_async:
             self.P1.terminate()
             self.P1.join()
 
-def mmc_detect_loop_remote( sizes, state, img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name):
+def mmc_detect_loop_remote( sizes,loaded_sizes, state, conf, img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name):
     detector = mmc_detect_loop_class()
-    detector.initialize( sizes, state, img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name )
+    detector.initialize( sizes,loaded_sizes, state, conf, img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name )
     detector.go_detect()
 
 class mmc_detect_loop_class:
 
-    def initialize( self, sizes, state, img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name ):
+    def initialize( self, sizes,loaded_sizes, state, conf,img_shm_name, img_coords_name, img_ref_name, img_shape, boxes_shm_name, box_hwnds_shm_name, box_info_shm_name ):
         from ultralytics import YOLO
         self.sizes = sizes
+        self.loaded_sizes = loaded_sizes
         self.state = state
         self.env = os.getenv( 'mmcNNenv' )
         self.last_t = 0
         self.fps_limit = 300
         self.last_detect_finish = 0
 
+        self.conf = conf
+
         self.models = {}
-        for size in mmc_const.supported_sizes:
+
+        while len(self.loaded_sizes):
+            self.loaded_sizes.pop(0)
+        for size in self.sizes:
             if self.env == 'openvino':
-                model = YOLO( "../neuralnet_models/640m_openvino_model" )
+                model = YOLO( "../neuralnet_models/640m_openvino_model", task="detect")
             elif self.env == 'directml':
                 onnx_path = "../neuralnet_models/640m.onnx"
-                model = YOLO( onnx_path )
+                model = YOLO( onnx_path , task="detect")
             elif self.env == 'tensorrt':
                 engine_path = "../neuralnet_models/640m-%d.engine"%size
                 if os.path.isfile( engine_path ):
-                    model = YOLO( engine_path )
+                    model = YOLO( engine_path , task="detect")
                 else:
                     model = None
             # tested this on 20240813
@@ -233,7 +247,7 @@ class mmc_detect_loop_class:
                 #else:
                     #model = None
             else:
-                model = YOLO( "../neuralnet_models/640m.pt" )
+                model = YOLO( "../neuralnet_models/640m.pt" , task="detect")
 
             if model is not None:
                 self.models[size] = model
@@ -243,6 +257,7 @@ class mmc_detect_loop_class:
             model = self.get_model_for_size( size )
             if model is not None:
                 self.get_model_for_size(size).predict(warmup_img, imgsz=size, verbose=False )
+                self.loaded_sizes.append(size)
 
         self.img_shape = img_shape
 
@@ -294,11 +309,12 @@ class mmc_detect_loop_class:
                         outs[ self.img_coords[i][4] ] = {}
 
                     self.profiler.mark( "presizes" )
+
                     for size in self.sizes:
                         if self.env == 'tensorrt': # tensorrt needs to have engine files designed for batching
-                            output = [ self.get_model_for_size(size).predict( x, imgsz=size, verbose = False )[0] for x in batch ]
+                            output = [ self.get_model_for_size(size).predict( x, imgsz=size, verbose = False , conf=float(self.conf.value))[0] for x in batch ]
                         else:
-                            output = self.get_model_for_size(size).predict( batch, imgsz=size, verbose = False )
+                            output = self.get_model_for_size(size).predict( batch, imgsz=size, verbose = False , conf=float(self.conf.value))
                         #if random.randint(0,100) <2:
                             #raise Exception( "test throw" )
                         self.profiler.mark( "predict" )
@@ -324,6 +340,12 @@ class mmc_detect_loop_class:
                     self.box_info_np[3] = sstime
 
                     self.profiler.mark( "done_outs" )
+                    n = n + 1
+                    if n == 100:
+                        t_end = time.perf_counter()
+                        print("100 detections in %.2f seconds, or %.1ffps" % (t_end - t_start, 100 / (t_end - t_start)))
+                        t_start = t_end
+                        n = 0
 
                 self.last_t = sstime
 
@@ -333,13 +355,6 @@ class mmc_detect_loop_class:
             self.profiler.mark( "done_sleep" )
 
             self.last_detect_finish = time.perf_counter()
-
-            n = n+1
-            if n == 100:
-                t_end = time.perf_counter()
-                print( "100 detections in %.2f seconds, or %.1ffps"%(t_end - t_start, 100 / ( t_end - t_start ) ) )
-                t_start = t_end
-                n = 0
             self.profiler.mark( "done" )
 
 class profiler:
@@ -440,11 +455,20 @@ class mmc_realtime:
         self.detector_async = mmc_detect_loop_async()
         self.detector_async.initialize( self.sc.img_shm_name, self.sc.img_coords_name, self.sc.img_ref_name, self.sc.img_shape, [], self.boxes_shm_name, self.box_hwnds_shm_name, self.box_info_shm_name )
         self.sizes = self.detector_async.sizes
+
+        self.loaded_sizes = self.detector_async.loaded_sizes
+
         self.to_show = {}
 
         self.on_gray_callback = None
         self.off_gray_callback = None
         self.gray_state = False
+
+        self.conf = self.detector_async.conf
+        self.delay_margin = self.detector_async.delay_margin
+        self.disable_gray_screen = False
+        self.mask_persistence_seconds = 0.15
+        self.mask_persistence_ns = self.mask_persistence_seconds * 1000 * 1000 * 1000
 
     def take_screenshot( self ):
         for hwnd in self.to_show:
@@ -457,8 +481,22 @@ class mmc_realtime:
             self.sizes.pop(0)
         self.sizes.extend( sizes )
 
+    def update_conf(self, conf):
+        self.conf.value = float(conf)
+
+    def update_delay_margin(self, value):
+        self.delay_margin.value = float(value)
+
+    def update_disable_gray_screen(self, value):
+        self.disable_gray_screen = bool(value)
+
+    def update_mask_persistence(self, value):
+        self.mask_persistence_seconds = float(value)
+        self.mask_persistence_ns = int(
+            self.mask_persistence_seconds * 1000 * 1000 * 1000
+        )
+
     def make_ready( self ):
-        self.time_safety_ns = mmc_config.get_time_settings()['time-safety'] * 1000 * 1000 * 1000
         self.detector_async.start()
         self.ready = True
 
@@ -475,6 +513,13 @@ class mmc_realtime:
 
         self.delay_key_print_history = {}
 
+        t1 = threading.Thread(target=self.sc.snap_hwnds, args=[self.hwnds])
+        if self.threaded_screenshot:
+            t1.start()
+        else:
+            t1.run()
+        self.profiler.mark('after_snap')
+
         while( True ):
             self.profiler.loop()
 
@@ -482,13 +527,6 @@ class mmc_realtime:
                 print( "DETECTOR THREAD FAILED.  EXITING.  PLEASE REPORT ANY ERRORS PRINTED ABOVE." )
                 sys.exit()
 
-            t1 = threading.Thread( target=self.sc.snap_hwnds, args = [ self.hwnds ] )
-            if self.threaded_screenshot:
-                t1.start()
-            else:
-                t1.run()
-
-            self.profiler.mark('after_snap')
 
             num_snapped = self.sc.img_ref[1]
             t_snapped = self.sc.img_ref[0]
@@ -498,6 +536,11 @@ class mmc_realtime:
             coords = self.sc.img_coords.copy()
 
             self.profiler.mark('copied_coords')
+
+            if t1.is_alive():
+                t1.join()
+
+            self.profiler.mark( 'post_join' )
 
             # grab the snapped images
             img_collection = {}
@@ -510,30 +553,42 @@ class mmc_realtime:
 
             self.profiler.mark( 'copied_img' )
 
-            img_buffer.append( [ t_snapped, img_collection ] )
-
-            self.profiler.mark( 'appended_buffer' )
-
-            delay_key = ( len( self.hwnds ), nn.sizes_to_key( self.sizes ) )
-            if delay_key in self.size_delays:
-                delay = self.size_delays[ delay_key ]
+            t1 = threading.Thread(target=self.sc.snap_hwnds, args=[self.hwnds])
+            if self.threaded_screenshot:
+                t1.start()
             else:
-                if delay_key in self.size_detection_timings:
-                    if len( self.size_detection_timings[ delay_key ] ) > 15 or ( len(self.size_detection_timings[delay_key] ) > 4 and sum( self.size_detection_timings[delay_key] ) > 4 * 1000000000 ):
-                        print( self.size_detection_timings[ delay_key ] )
-                        delay = 2.2 * sum( self.size_detection_timings[delay_key] ) / len( self.size_detection_timings[delay_key] ) + self.time_safety_ns/2
-                        self.size_delays[delay_key] = delay
-                        print( 'delay set to %.3fs'%(delay/1000000000,) )
-                    else:
-                        if delay_key not in self.delay_key_print_history or len(self.delay_key_print_history[ delay_key ]) != len(self.size_detection_timings[ delay_key ]):
-                            print( "calculating delay....", self.size_detection_timings[delay_key] )
-                            self.delay_key_print_history[ delay_key ] = self.size_detection_timings[ delay_key ].copy()
-                            delay = 3*1000000000
-                else:
-                    if delay_key not in self.delay_key_print_history or self.delay_key_print_history[ delay_key ] != []:
-                        self.delay_key_print_history[ delay_key ] = []
-                        print( "calculating delay...." )
-                        delay = 3*1000000000
+                t1.run()
+            self.profiler.mark('after_snap')
+
+            img_buffer.append([t_snapped, img_collection])
+            self.profiler.mark('appended_buffer')
+
+            # delay_key = ( len( self.hwnds ), nn.sizes_to_key( self.sizes ) )
+            # if delay_key in self.size_delays:
+            #     delay = self.size_delays[ delay_key ]
+            # else:
+            #     if delay_key in self.size_detection_timings:
+            #         if len( self.size_detection_timings[ delay_key ] ) > 15 or ( len(self.size_detection_timings[delay_key] ) > 4 and sum( self.size_detection_timings[delay_key] ) > 4 * 1000000000 ):
+            #             print( self.size_detection_timings[ delay_key ] )
+            #             delay = 2.2 * sum( self.size_detection_timings[delay_key] ) / len( self.size_detection_timings[delay_key] ) + self.time_safety_ns/2
+            #             self.size_delays[delay_key] = delay
+            #             print( 'delay set to %.3fs'%(delay/1000000000,) )
+            #         else:
+            #             if delay_key not in self.delay_key_print_history or len(self.delay_key_print_history[ delay_key ]) != len(self.size_detection_timings[ delay_key ]):
+            #                 print( "calculating delay....", self.size_detection_timings[delay_key] )
+            #                 self.delay_key_print_history[ delay_key ] = self.size_detection_timings[ delay_key ].copy()
+            #                 delay = 3*1000000000
+            #     else:
+            #         if delay_key not in self.delay_key_print_history or self.delay_key_print_history[ delay_key ] != []:
+            #             self.delay_key_print_history[ delay_key ] = []
+            #             print( "calculating delay...." )
+            #             delay = 3*1000000000
+
+            delay_key = (len(self.hwnds), nn.sizes_to_key(self.sizes))
+            if delay_key in self.size_delays:
+                delay = self.size_delays[delay_key]
+            else:
+                delay = 3 * 1000000000
 
             oldest_keep_img = time.perf_counter_ns() - delay
 
@@ -545,8 +600,8 @@ class mmc_realtime:
 
             # eliminate old detections
             to_show_time_ns = img_buffer[0][0]
-            oldest_detection = to_show_time_ns - self.time_safety_ns
-            latest_detection = to_show_time_ns + self.time_safety_ns
+            oldest_detection = to_show_time_ns - self.mask_persistence_ns
+            latest_detection = to_show_time_ns + self.mask_persistence_ns
             for hwnd in self.hwnd_times:
                 popped = False
                 while( len( self.hwnd_times[hwnd] )>1 and self.hwnd_times[hwnd][1][0] < oldest_detection ):
@@ -580,10 +635,28 @@ class mmc_realtime:
                     if num_boxes:
                         self.boxes[self.boxes_hwnd_index[hwnd]][new_first_index:new_last_index+1]=self.boxes_np[i][0:num_boxes]
                     self.hwnd_times[hwnd].append( [ detection_time, new_first_index, new_last_index ] )
+                    # if self.last_detection_found > 0:
+                    #     detected_delay_key=(self.box_info_np[1],self.box_info_np[2])
+                    #     if detected_delay_key not in self.size_delays:
+                    #         self.size_detection_timings.setdefault(detected_delay_key,[]).append( detection_time - self.last_detection_found )
+
                     if self.last_detection_found > 0:
-                        detected_delay_key=(self.box_info_np[1],self.box_info_np[2])
-                        if detected_delay_key not in self.size_delays:
-                            self.size_detection_timings.setdefault(detected_delay_key,[]).append( detection_time - self.last_detection_found )
+                        detected_delay_key = (self.box_info_np[1], self.box_info_np[2])
+                        interval = detection_time - self.last_detection_found
+
+                        timings = self.size_detection_timings.setdefault(detected_delay_key, [])
+                        timings.append(interval)
+
+                        if len(timings) > 30:
+                            stable_interval = statistics.mean(timings)
+                            dynamic_delay = max(0, 2.2 * stable_interval + self.delay_margin.value * 1000 * 1000 * 1000)
+                            # stable_interval = np.percentile(timings, 90)
+                            # dynamic_delay = 1.2 * stable_interval
+                            self.size_delays[detected_delay_key] = dynamic_delay
+                            print( 'delay set to %.3fs'%(self.size_delays[detected_delay_key]/1000000000,) )
+                            timings[:]=timings[-15:]
+
+
                 self.last_detection_found = detection_time
 
             self.profiler.mark( 'reshaped_boxes' )
@@ -595,10 +668,16 @@ class mmc_realtime:
             for hwnd in img_buffer[-1][1]: # the list of things to show is whatever the *latest* list of captured coordinates is
                 self.profiler.mark( 'pre_full' )
                 new_xyxy = img_buffer[-1][1][hwnd][1]
-                self.to_show[ hwnd ] = np.full( (new_xyxy[3]-new_xyxy[1], new_xyxy[2]-new_xyxy[0], 3 ), 127, dtype=np.uint8 )
+                # self.to_show[ hwnd ] = np.full( (new_xyxy[3]-new_xyxy[1], new_xyxy[2]-new_xyxy[0], 3 ), 127, dtype=np.uint8 )
+                h = new_xyxy[3] - new_xyxy[1]
+                w = new_xyxy[2] - new_xyxy[0]
+                old_img = self.to_show.get(hwnd)
+                if old_img is None or old_img.shape[0] != h or old_img.shape[1] != w:
+                    self.to_show[hwnd] = np.empty((h, w, 3), dtype=np.uint8)
                 self.profiler.mark( 'post_full' )
 
-                if hwnd in img_buffer[0][1] and hwnd in self.hwnd_times and self.hwnd_times[hwnd][0][0] < img_buffer[0][0] and self.hwnd_times[hwnd][-1][0] > img_buffer[0][0]:
+                if (hwnd in img_buffer[0][1] and hwnd in self.hwnd_times and
+                        (self.disable_gray_screen or(self.hwnd_times[hwnd][0][0] < img_buffer[0][0] and self.hwnd_times[hwnd][-1][0] > img_buffer[0][0]))):
                     old_xyxy = img_buffer[0][1][hwnd][1]
                     self.profiler.mark( 'got_old_xyxy' )
                     min_h = min( old_xyxy[3] - old_xyxy[1], new_xyxy[3] - new_xyxy[1] )
@@ -610,7 +689,10 @@ class mmc_realtime:
                     for i in range(len(self.hwnd_times[hwnd])):
                         if self.hwnd_times[hwnd][i][0]>latest_detection:
                             break
-                    last_box_index = self.hwnd_times[hwnd][i][2]
+                    if i <len(self.hwnd_times[hwnd]):
+                        last_box_index = self.hwnd_times[hwnd][i][2]
+                    else:
+                        last_box_index = self.hwnd_times[hwnd][-1][2]
 
                     # you could do this faster by intersecting with window size as you
                     # go, but it's really annoying
@@ -626,6 +708,7 @@ class mmc_realtime:
 
                     self.profiler.mark( 'decorated' )
                 else:
+                    self.to_show[hwnd].fill(127)
                     has_gray_img = True
 
                 self.show( self.to_show[ hwnd ], hwnd, new_xyxy )
@@ -660,7 +743,7 @@ class mmc_realtime:
 
             self.profiler.mark( 'post_fps' )
 
-            if( cv2.waitKey(1) == ord('q') or self.running == False ):
+            if( cv2.pollKey() == ord('q') or self.running == False ):
                 cv2.destroyAllWindows()
                 self.open_windows = {}
                 if t1.is_alive():
@@ -669,10 +752,6 @@ class mmc_realtime:
 
             self.profiler.mark( 'post_wait' )
 
-            if t1.is_alive():
-                t1.join()
-
-            self.profiler.mark( 'post_join' )
 
     def show( self, img, real_hwnd, new_xyxy ):
         cv_title = self.cv_title_template%real_hwnd

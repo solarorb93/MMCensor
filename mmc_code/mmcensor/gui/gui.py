@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from mmcensor.rt import mmc_realtime
 import os
 import sys
@@ -8,6 +8,9 @@ import mmcensor.const as mmc_const
 from functools import partial
 import threading
 import json
+
+import mmcensor.const as mmc_const
+
 
 class mmc_gui:
     
@@ -19,15 +22,19 @@ class mmc_gui:
         ##########################
         self.root = tk.Tk()
         self.root.protocol( "WM_DELETE_WINDOW", self.on_close )
-        self.root.geometry( "800x800" )
+        self.root.geometry("1200x950")
+        self.root.minsize(800, 600)
 
-        self.save_button = tk.Button( self.root, text= "Save", command = self.save_pushed )
-        self.save_as_button = tk.Button( self.root, text = "Save As (not yet implemented)" )
+        self.save_button = tk.Button( self.root, text= "Save", command = self.save_file )
+        self.save_as_button = tk.Button( self.root, text = "Save As", command = self.save_as_pushed)
         self.load_button = tk.Button( self.root, text = "Load", command=self.load_pushed )
+        self.load_from_button = tk.Button( self.root, text = "Load From", command=self.load_from_pushed )
+
 
         self.save_button.grid( row=0, column = 0 )
         self.save_as_button.grid( row=0, column=1 )
         self.load_button.grid( row = 0, column = 2 )
+        self.load_from_button.grid( row = 0, column = 3 )
 
         tab_parent = ttk.Notebook( self.root )
         self.tab_decorate = ttk.Frame( tab_parent )
@@ -71,10 +78,104 @@ class mmc_gui:
         self.refresh_hwnds()
 
         self.size_checks = []
+        self.size_buttons = []
+
+        self.is_make_ready = False
+
         for i in range(len(mmc_const.supported_sizes ) ):
             iv = tk.IntVar( value=(i<2) )
-            tk.Checkbutton( self.tab_realtime, text='net size %s'%(mmc_const.supported_sizes[i],),onvalue=1,offvalue=0,variable=iv,command=self.update_sizes).grid(row=2+i,column=0)
+            cb=tk.Checkbutton( self.tab_realtime, text='net size %s'%(mmc_const.supported_sizes[i],),onvalue=1,offvalue=0,variable=iv,command=self.update_sizes)
+            cb.grid(row=2+i,column=0)
             self.size_checks.append( iv )
+            self.size_buttons.append(cb)
+
+        self.delay_var = tk.DoubleVar(value=0.075)
+        tk.Label(
+            self.tab_realtime,
+            text="Delay Adjustment"
+        ).grid(
+            row=2 + len(mmc_const.supported_sizes),
+            column=0
+        )
+        self.delay_scale = tk.Scale(
+            self.tab_realtime,
+            from_ =-0.4,
+            to =0.6,
+            resolution=0.005,
+            orient=tk.HORIZONTAL,
+            variable=self.delay_var,
+            command=self.update_delay,
+            length=300
+        )
+        self.delay_scale.grid(
+            row=2 + len(mmc_const.supported_sizes),
+            column=1,
+            columnspan=3,
+            sticky="we"
+        )
+
+        self.disable_gray_screen_var = tk.BooleanVar(value=False)
+
+        self.disable_gray_screen_check = tk.Checkbutton(
+            self.tab_realtime,
+            text="Disable Gray Screen",
+            variable=self.disable_gray_screen_var,
+            command=self.disable_gray_screen_changed
+        )
+
+        self.disable_gray_screen_check.grid(
+            row=3 + len(mmc_const.supported_sizes),
+        )
+
+        self.mask_persistence_var = tk.DoubleVar(value=0.15)
+        tk.Label(
+            self.tab_realtime,
+            text="Mask Persistence"
+        ).grid(
+            row=4 + len(mmc_const.supported_sizes),
+            column=0
+        )
+        self.mask_persistence_scale = tk.Scale(
+            self.tab_realtime,
+            from_= 0.000,
+            to=1.000,
+            resolution=0.005,
+            orient=tk.HORIZONTAL,
+            variable=self.mask_persistence_var,
+            command=self.mask_persistence_changed,
+            length=300
+        )
+        self.mask_persistence_scale.grid(
+            row=4 + len(mmc_const.supported_sizes),
+            column=1,
+            columnspan=3,
+            sticky="we"
+        )
+
+        self.conf_var = tk.DoubleVar(value=0.25)
+        tk.Label(
+            self.tab_realtime,
+            text="Confidence"
+        ).grid(
+            row=5 + len(mmc_const.supported_sizes),
+            column=0
+        )
+        self.conf_scale = tk.Scale(
+            self.tab_realtime,
+            from_=0.01,
+            to=1.00,
+            resolution=0.005,
+            orient=tk.HORIZONTAL,
+            variable=self.conf_var,
+            command=self.update_conf,
+            length=300
+        )
+        self.conf_scale.grid(
+            row=5 + len(mmc_const.supported_sizes),
+            column=1,
+            columnspan=3,
+            sticky="we"
+        )
 
         ################################
         ## make decorator tab
@@ -118,13 +219,33 @@ class mmc_gui:
     def down( self ):
         self.root.attributes( '-topmost', False )
 
-    def update_sizes( self ):
+    def update_sizes(self):
         sizes = []
+
         for i in range(len(mmc_const.supported_sizes)):
             if self.size_checks[i].get():
-                sizes.append( mmc_const.supported_sizes[i] )
+                size = mmc_const.supported_sizes[i]
+
+                if not self.is_make_ready or size in list(self.rt.loaded_sizes):
+                    sizes.append(size)
 
         self.rt.update_sizes(sizes)
+
+    def update_conf(self, value=None):
+        conf = float(self.conf_var.get())
+        self.rt.update_conf(conf)
+
+    def update_delay(self, value=None):
+        delay = float(self.delay_var.get())
+        self.rt.update_delay_margin(delay)
+
+    def disable_gray_screen_changed(self):
+        self.rt.update_disable_gray_screen(
+            self.disable_gray_screen_var.get()
+        )
+
+    def mask_persistence_changed(self, value=None):
+        self.rt.update_mask_persistence(float(self.mask_persistence_var.get()))
 
     def get_known_decorators( self ):
         paths = [ f.name for f in os.scandir('mmcensor/decorate') if f.is_dir() ]
@@ -177,33 +298,122 @@ class mmc_gui:
         self.rt.decorators[index].destroy_config_frame()
         self.decorator_config_frame.destroy()
         self.redraw_decorators()
-    
-    def save_pushed( self ):
-        save_data = []
-        for i in range( len( self.rt.decorators ) ):
-            save_data.append( [ self.decorator_types[i], self.rt.decorators[i].export_settings() ] )
 
-        with open('saved_settings.json', 'w') as f:
-            json.dump( save_data, f )
+    def get_next_save_filename(self):
+        i = 1
+        while True:
+            filename = f"saved_settings_{i}.json"
+            if not os.path.exists(filename):
+                return filename
+            i += 1
 
-    def load_pushed( self ):
-        if not os.path.isfile( 'saved_settings.json' ):
+    def save_as_pushed( self):
+        path = filedialog.asksaveasfilename(
+            title="Save settings as",
+            defaultextension=".json",
+            initialfile=self.get_next_save_filename(),
+            filetypes=[
+                ("JSON files", "*.json"),
+            ]
+        )
+
+        if not path:
             return
 
-        with open('saved_settings.json' ) as data_file:
-            save_data = json.load( data_file )
+        self.save_file(path)
+
+    def save_file(self, path="saved_settings.json"):
+        save_data = {
+            "decorators": [],
+            "realtime": {
+                "selected_sizes": [
+                    mmc_const.supported_sizes[i]
+                    for i in range(len(mmc_const.supported_sizes))
+                    if self.size_checks[i].get()
+                ],
+                "delay_adjustment": float(self.delay_var.get()),
+                "disable_gray_screen": bool(self.disable_gray_screen_var.get()),
+                "mask_persistence": float(self.mask_persistence_var.get()),
+                "confidence": float(self.conf_var.get())
+            }
+        }
+        for i in range(len(self.rt.decorators)):
+            save_data["decorators"].append([self.decorator_types[i], self.rt.decorators[i].export_settings()])
+        with open(path, 'w', encoding="utf-8") as f:
+            json.dump(save_data, f)
+
+    def load_pushed(self):
+        if os.path.isfile("saved_settings.json"):
+            self.load_file("saved_settings.json")
+            return
+
+        if os.path.isfile("saved_settings_1.json"):
+            self.load_file("saved_settings_1.json")
+            return
+
+    def load_from_pushed( self):
+        path = filedialog.askopenfilename(
+            title="Load settings",
+            filetypes=[
+                ("JSON files", "*.json"),
+            ]
+        )
+        if not path:
+            return
+        self.load_file(path)
+
+    def load_file(self, path="saved_settings.json"):
+        if not os.path.isfile(path):
+            return
+
+        with open(path, "r", encoding="utf-8") as data_file:
+            save_data = json.load(data_file)
 
         self.rt.decorators.clear()
         self.decorator_types.clear()
 
-        for elt in save_data:
-            self.add_decorator( elt[0] )
-            self.rt.decorators[-1].import_settings( elt[1] )
+        if isinstance(save_data, list):
+            decorators_data = save_data
+            realtime_data = {}
+        else:
+            decorators_data = save_data.get("decorators", [])
+            realtime_data = save_data.get("realtime", {})
+
+        for elt in decorators_data:
+            self.add_decorator(elt[0])
+            self.rt.decorators[-1].import_settings(elt[1])
+
+        selected_sizes = realtime_data.get("selected_sizes")
+        if selected_sizes is not None:
+            for i, size in enumerate(mmc_const.supported_sizes):
+                self.size_checks[i].set(1 if size in selected_sizes else 0)
+            self.update_sizes()
+
+        if "delay_adjustment" in realtime_data:
+            self.delay_var.set(realtime_data["delay_adjustment"])
+            self.update_delay()
+
+        if "disable_gray_screen" in realtime_data:
+            self.disable_gray_screen_var.set(realtime_data["disable_gray_screen"])
+            self.disable_gray_screen_changed()
+
+        if "mask_persistence" in realtime_data:
+            self.mask_persistence_var.set(realtime_data["mask_persistence"])
+            self.mask_persistence_changed()
+
+        if "confidence" in realtime_data:
+            self.conf_var.set(realtime_data["confidence"])
+            self.update_conf()
 
         self.redraw_decorators()
 
     def make_ready_pushed( self ):
+        self.is_make_ready = True
+        for i in range(len(mmc_const.supported_sizes)):
+               self.size_buttons[i].config(state=tk.DISABLED)
         self.ready_button.config(state='disabled')
+        self.load_button.config(state='disabled')
+        self.load_from_button.config(state='disabled')
         self.t_ready = threading.Thread( target=self.make_ready_async )
         self.t_ready.daemon = True
         self.t_ready.start()
@@ -211,6 +421,15 @@ class mmc_gui:
     def make_ready_async( self ):
         self.rt.make_ready()
         self.start_button.config(state='normal')
+        self.load_button.config(state='normal')
+        self.load_from_button.config(state='normal')
+        loaded_sizes = list(self.rt.loaded_sizes)
+        print("Loaded model:"+str(loaded_sizes))
+        for i, size in enumerate(mmc_const.supported_sizes):
+            if size in loaded_sizes:
+                self.size_buttons[i].config(state=tk.NORMAL)
+            else:
+                self.size_buttons[i].config(state=tk.DISABLED)
 
     def start_pushed( self ):
         self.start_button.config(state='disabled')
